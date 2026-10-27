@@ -41,6 +41,10 @@
   .total b{font-family:var(--mono);font-size:1.15rem;color:var(--accent)}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem;margin:.8rem 0}
   .card .amt{color:var(--accent);font-family:var(--mono);margin-left:.4rem}
+  .triage{margin:.45rem 0 0;font-size:.9rem;color:var(--dim)}
+  .badge.ok{background:rgba(76,195,138,.14);color:var(--accent);border-color:rgba(76,195,138,.35)}
+  .badge.bad{background:rgba(255,107,107,.12);color:var(--bad);border-color:rgba(255,107,107,.35)}
+  .ok{color:var(--accent)} .bad{color:var(--bad)}
   .badge{display:inline-block;border-radius:999px;padding:.04rem .45rem;font-size:.7rem;border:1px solid var(--line);color:var(--dim);font-family:var(--mono)}
   .badge.ok{color:var(--accent);border-color:#2f6f4f}
   .badge.no{color:var(--bad);border-color:#5c2b2b}
@@ -265,6 +269,20 @@ async function ethCall(to, data) {
 }
 
 /** Six pools and 19 token claims, exactly one request. */
+/** Current base fee, so a claim can be judged net of the gas it costs to collect. */
+async function getBaseFee() {
+  calls++;
+  if (rpcOverride) return BigInt(await rpcFetch(rpcOverride, "eth_getBlockByNumber", ["latest", false]).then((b) => b.baseFeePerGas));
+  let lastErr;
+  for (const url of PUBLIC_RPCS) {
+    try {
+      const b = await rpcFetch(url, "eth_getBlockByNumber", ["latest", false]);
+      if (b && b.baseFeePerGas) return BigInt(b.baseFeePerGas);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("base fee unavailable");
+}
+
 async function readClaims(user) {
   const callsList = [];
   for (const p of POOLS) callsList.push({ target: p.addr, data: readCalldata(p, user, ZERO_TOKEN), pool: p, kind: "ETH" });
@@ -333,17 +351,41 @@ function renderPools(user, pools) {
   }
   el("pools").hidden = false;
   const live = pools.filter((r) => r.wei > 0n).length;
+  // Triage is computed here because this runs before the cards and owns the summary line.
+  const baseFee = window.__baseFee || 0n;
+  let triage = "";
+  if (baseFee) {
+    let cost = 0n, bad = 0;
+    for (const r of pools) {
+      if (!r.ok || r.wei === 0n) continue;
+      const c = BigInt(r.pool.gas + 4000) * baseFee;
+      cost += c;
+      if (r.wei <= c) bad++;
+    }
+    const net = total - cost;
+    triage = "<p class='triage'>After gas at " + (Number(baseFee) / 1e9).toFixed(4) + " gwei: <b>"
+      + decimalString(net > 0n ? net : 0n, 18) + " ETH net</b>"
+      + (bad ? " · <span class='bad'>" + bad + " claim(s) cost more than they pay</span>"
+             : " · <span class='ok'>every claim clears its gas</span>") + "</p>";
+  }
   el("summary").innerHTML = "<p class='total'>Total claimable: <b>" + decimalString(total, 18)
-    + " ETH</b> <span class='dim'>across " + live + " of " + pools.length + " pool(s)</span></p>";
+    + " ETH</b> <span class='dim'>across " + live + " of " + pools.length + " pool(s)</span></p>" + triage;
   return total;
 }
 
 function renderEthCards(user, pools) {
   const live = pools.filter((r) => r.wei > 0n);
   el("cards-section").hidden = live.length === 0;
-  el("cards").innerHTML = live.map((r) => txCard({
-    title: r.pool.name + " <span class='badge'>ETH</span>",
-    amount: decimalString(r.wei, 18) + " ETH",
+  const baseFee = window.__baseFee || 0n;
+  el("cards").innerHTML = live.map((r) => {
+    const gasCost = baseFee ? BigInt(r.pool.gas + 4000) * baseFee : 0n;
+    const net = r.wei - gasCost;
+    const badge = baseFee === 0n ? "" : (net > 0n
+      ? " <span class='badge ok'>worth claiming</span>"
+      : " <span class='badge bad'>below gas cost</span>");
+    return txCard({
+    title: r.pool.name + badge,
+    amount: decimalString(r.wei, 18) + " ETH" + (baseFee ? " · net " + decimalString(net > 0n ? net : 0n, 18) + " ETH after gas" : ""),
     target: r.pool.addr,
     data: r.pool.claim === "idex" ? idexWithdrawCalldata(r.wei) : withdrawCalldata(r.wei),
     gas: r.pool.gas + 4000,
@@ -351,7 +393,8 @@ function renderEthCards(user, pools) {
     args: r.pool.claim === "idex"
       ? "<code>0x0</code> (ETH), <code>" + r.wei.toString() + "</code> (wei)"
       : "<code>" + r.wei.toString() + "</code> (wei)"
-  })).join("");
+    });
+  }).join("");
 }
 
 function renderTokenCards(user, tokens) {
@@ -410,6 +453,7 @@ async function checkClaims(addrText) {
   setStatus("Reading six pools and 19 token claims in one Multicall3 request…");
   calls = 0;
   try {
+    try { window.__baseFee = await getBaseFee(); } catch (_) { window.__baseFee = 0n; }
     const { calldata, pools, tokens } = await readClaims(queried);
     el("calls").textContent = calls + " eth_call · " + (POOLS.length + TOKENS.length) + " sub-calls · " + hostOf(rpcOverride || PUBLIC_RPCS[0]);
     const total = renderPools(queried, pools);
