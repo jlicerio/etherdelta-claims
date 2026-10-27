@@ -61,7 +61,7 @@
 <main>
   <header>
     <h1>Legacy EtherDelta claim checker</h1>
-    <p class="lead">Six 2016–2017 exchange contracts still hold ETH that their users can withdraw, and EtherDelta V2 still holds ERC-20 claims. Enter an address: this page reads all of it in one public <code>eth_call</code> and shows the exact transaction that releases each claim, so you can send it from any wallet you already trust. Nothing here needs your wallet, your signature, or this page to stay online.</p>
+    <p class="lead">Seven 2016–2018 contracts still hold ETH that their users can withdraw, and EtherDelta V2 still holds ERC-20 claims. Enter an address: this page reads all of it in one public <code>eth_call</code> and shows the exact transaction that releases each claim, so you can send it from any wallet you already trust. Nothing here needs your wallet, your signature, or this page to stay online.</p>
   </header>
 
   <section class="panel">
@@ -126,6 +126,7 @@ const SEL_WITHDRAW       = "0x2e1a7d4d";
 const SEL_WITHDRAW_TOKEN = "0x9e281a98";
 const SEL_BAL_2          = "0xf7888aec";
 const SEL_BAL_1          = "0x70a08231";
+const SEL_WITHDRAW_2     = "0xf3fef3a3"; // IDEX v1: withdraw(address token, uint256 amount)
 const ZERO_TOKEN         = "0x0000000000000000000000000000000000000000";
 
 const PUBLIC_RPCS = [
@@ -134,13 +135,14 @@ const PUBLIC_RPCS = [
   "https://eth.llamarpc.com"
 ];
 
-/* Six pools, each with the getter it actually exposes and a measured withdrawal cost. */
+/* Seven pools, each with the getter it actually exposes and a measured withdrawal cost. */
 const POOLS = [
   { key:"edv2",   name:"EtherDelta V2",  addr:"0x8d12A197cB00D4747a1fe03395095ce2A5CC6819", getter:"bal2", gas:36493 },
   { key:"famA",   name:"ED-family A",    addr:"0x4d55f76ce2dbbae7b48661bef9bd144ce0c9091b", getter:"bal2", gas:38726 },
   { key:"famB",   name:"ED-family B",    addr:"0x4aea7cf559f67cedcad07e12ae6bc00f07e8cf65", getter:"bal2", gas:38726 },
   { key:"v1b",    name:"EtherDelta V1b", addr:"0x373c55c277b866a69dc047cad488154ab9759466", getter:"bal2", gas:38726 },
   { key:"tstore", name:"Token.Store",    addr:"0x1ce7ae555139c5ef5a57cc8d814a867ee6ee33d8", getter:"bal2", gas:38726 },
+  { key:"idex",   name:"IDEX v1", addr:"0x2a0c0DBEcC7E4D658f48E01e3fA353F44050c208", getter:"bal2", gas:42077, claim:"idex" },
   { key:"v1",     name:"Old WETH (2016)", addr:"0xecf8f87f810ecf450940c9f60066b4a7a501d6a7", getter:"bal1", gas:38726 }
 ];
 const EDV2 = POOLS[0].addr;
@@ -229,6 +231,7 @@ const readCalldata = (pool, user, token) => pool.getter === "bal1"
   ? SEL_BAL_1 + wordAddr(user)
   : SEL_BAL_2 + wordAddr(token || ZERO_TOKEN) + wordAddr(user);
 const withdrawCalldata = (wei) => SEL_WITHDRAW + word(wei);
+const idexWithdrawCalldata = (wei) => SEL_WITHDRAW_2 + wordAddr(ZERO_TOKEN) + word(wei);
 const withdrawTokenCalldata = (token, raw) => SEL_WITHDRAW_TOKEN + wordAddr(token) + word(raw);
 
 /* ------------------------------------------------ read path ---------------------------------------------- */
@@ -342,10 +345,12 @@ function renderEthCards(user, pools) {
     title: r.pool.name + " <span class='badge'>ETH</span>",
     amount: decimalString(r.wei, 18) + " ETH",
     target: r.pool.addr,
-    data: withdrawCalldata(r.wei),
+    data: r.pool.claim === "idex" ? idexWithdrawCalldata(r.wei) : withdrawCalldata(r.wei),
     gas: r.pool.gas + 4000,
-    fn: "withdraw",
-    args: "<code>" + r.wei.toString() + "</code> (wei)"
+    fn: r.pool.claim === "idex" ? "withdraw(address,uint256)" : "withdraw",
+    args: r.pool.claim === "idex"
+      ? "<code>0x0</code> (ETH), <code>" + r.wei.toString() + "</code> (wei)"
+      : "<code>" + r.wei.toString() + "</code> (wei)"
   })).join("");
 }
 
